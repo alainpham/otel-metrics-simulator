@@ -22,7 +22,7 @@ const DEFAULT_CONFIG = {
         exampleMetric("m2", "webshop", "cart", 1),
         exampleMetric("m3", "webshop", "checkout", 1),
         exampleMetric("m4", "payments", "payment-gateway", 1),
-        exampleMetric("m5", "payments", "fraud-detection", 0)
+        exampleMetric("m5", "payments", "fraud-detection", 1)
     ]
 };
 
