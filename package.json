@@ -1,0 +1,20 @@
+{
+  "name": "otel-metrics-simulator",
+  "version": "1.0.0",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "LIVERELOAD=1 node --watch --watch-path=./server --watch-path=./public server/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "axios": "1.20.0",
+    "body-parser": "2.4.0",
+    "cors": "2.8.6",
+    "express": "5.3.0",
+    "pino": "10.4.0"
+  }
+}

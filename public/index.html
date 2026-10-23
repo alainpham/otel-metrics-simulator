@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>otel-metrics-simulator</title>
+    <style>
+        :root {
+            --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --border: #dde1e7;
+            --accent: #3b5bdb; --ok: #2b8a3e; --err: #c92a2a; --input: #fff;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #111318; --panel: #1a1d24; --text: #e6e8ec; --muted: #9aa1ad; --border: #2c313b;
+                --accent: #748ffc; --ok: #51cf66; --err: #ff6b6b; --input: #12151b;
+            }
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+        header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1; }
+        header h1 { font-size: 17px; margin: 0 auto 0 0; }
+        main { max-width: 1200px; margin: 0 auto; padding: 16px 20px 40px; display: grid; gap: 16px; }
+        section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+        h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+        h2 .spacer { flex: 1; }
+        label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+        input, select { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px; min-width: 0; }
+        input[type=checkbox] { width: 16px; height: 16px; }
+        button { font: inherit; border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 5px; padding: 5px 12px; cursor: pointer; }
+        button:hover { border-color: var(--accent); }
+        button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+        button.danger { color: var(--err); }
+        button.small { padding: 2px 8px; font-size: 12px; }
+        .row { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); align-items: end; }
+        .wide { grid-column: span 2; }
+        .kv { display: grid; gap: 6px; }
+        .kv-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; }
+        .metric { border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 10px; display: grid; gap: 10px; }
+        .metric.disabled { opacity: .55; }
+        .metric-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .metric-head strong { flex: 1; }
+        .stats { font-size: 12px; color: var(--muted); }
+        .stats .ok { color: var(--ok); } .stats .err { color: var(--err); }
+        .badge { font-size: 12px; padding: 2px 10px; border-radius: 10px; border: 1px solid var(--border); }
+        .badge.on { color: var(--ok); border-color: var(--ok); }
+        .hint { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+        #message { font-size: 13px; }
+        #message.err { color: var(--err); } #message.ok { color: var(--ok); }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        td, th { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+        td.err { color: var(--err); } td.ok { color: var(--ok); }
+        .log { max-height: 260px; overflow: auto; }
+        pre { background: var(--input); border: 1px solid var(--border); border-radius: 5px; padding: 10px; max-height: 400px; overflow: auto; font-size: 12px; }
+        .hidden { display: none; }
+        @media (max-width: 640px) { .wide { grid-column: auto; } header, main { padding-left: 16px; padding-right: 16px; } }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>OTel Metrics Simulator</h1>
+        <span id="runState" class="badge">stopped</span>
+        <span id="message"></span>
+        <button id="saveBtn">Save</button>
+        <button id="sendOnceBtn">Send once</button>
+        <button id="startBtn" class="primary">Start</button>
+        <button id="stopBtn" class="danger">Stop</button>
+    </header>
+
+    <main>
+        <section>
+            <h2>Connection</h2>
+            <div class="row">
+                <label class="wide">OTLP/HTTP endpoint
+                    <input id="endpoint" placeholder="http://localhost:4318">
+                </label>
+                <label>Basic auth username
+                    <input id="authUser" autocomplete="off" placeholder="e.g. Grafana Cloud instance id">
+                </label>
+                <label>Basic auth password / token
+                    <input id="authPass" type="password" autocomplete="new-password">
+                </label>
+            </div>
+            <p class="hint">Metrics are POSTed as OTLP JSON to <code id="resolvedUrl"></code>
+                (<code>/v1/metrics</code> is appended unless already present). Leave basic auth empty to send
+                without an <code>Authorization</code> header.</p>
+            <h2 style="margin-top:12px">Extra headers <span class="spacer"></span>
+                <button class="small" data-add-kv="headers">+ header</button></h2>
+            <div id="headers" class="kv"></div>
+        </section>
+
+        <section>
+            <h2>Metrics <span class="spacer"></span>
+                <button class="small" id="importBtn">Import JSON</button>
+                <button class="small" id="exportBtn">Export JSON</button>
+                <button class="small" id="addMetricBtn">+ metric</button></h2>
+            <input id="importFile" type="file" accept="application/json" class="hidden">
+            <div id="metrics"></div>
+        </section>
+
+        <section>
+            <h2>Activity <span class="spacer"></span>
+                <button class="small" id="previewBtn">Preview payload</button>
+                <button class="small" id="resetBtn">Reset counters</button></h2>
+            <pre id="preview" class="hidden"></pre>
+            <div class="log">
+                <table>
+                    <thead><tr><th>Time</th><th>Metric</th><th>Value</th><th>Result</th></tr></thead>
+                    <tbody id="activity"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <template id="metricTpl">
+        <div class="metric">
+            <div class="metric-head">
+                <input type="checkbox" data-f="enabled" title="Enabled">
+                <strong data-title></strong>
+                <span class="stats" data-stats></span>
+                <button class="small" data-dup>Duplicate</button>
+                <button class="small danger" data-del>Remove</button>
+            </div>
+            <div class="row">
+                <label class="wide">Name <input data-f="name" placeholder="http.server.requests"></label>
+                <label>Type
+                    <select data-f="type">
+                        <option value="gauge">gauge</option>
+                        <option value="counter">counter (monotonic sum)</option>
+                        <option value="updowncounter">up-down counter (sum)</option>
+                        <option value="histogram">histogram</option>
+                    </select>
+                </label>
+                <label>Unit <input data-f="unit" placeholder="ms, By, 1, %"></label>
+                <label>Every (seconds) <input data-f="intervalSeconds" type="number" min="1" step="1"></label>
+            </div>
+            <div class="row">
+                <label class="wide">Description <input data-f="description"></label>
+                <label>Value
+                    <select data-f="valueMode">
+                        <option value="constant">constant</option>
+                        <option value="random">random in range</option>
+                    </select>
+                </label>
+                <label data-show="constant">Value <input data-f="value" type="number" step="any"></label>
+                <label data-show="random">Min <input data-f="min" type="number" step="any"></label>
+                <label data-show="random">Max <input data-f="max" type="number" step="any"></label>
+                <label data-show="histogram" class="wide">Bucket bounds (comma separated)
+                    <input data-f="buckets" placeholder="5, 10, 25, 50, 100, 250, 500, 1000"></label>
+            </div>
+            <p class="hint" data-type-hint></p>
+            <div>
+                <h2 style="font-size:13px;margin:0 0 6px">Resource attributes <span class="spacer"></span>
+                    <button class="small" data-add-res>+ resource attribute</button></h2>
+                <div class="kv" data-res></div>
+            </div>
+            <div>
+                <h2 style="font-size:13px;margin:0 0 6px">Attributes <span class="spacer"></span>
+                    <button class="small" data-add-attr>+ attribute</button></h2>
+                <div class="kv" data-attrs></div>
+            </div>
+        </div>
+    </template>
+
+<script>
+const TYPE_HINTS = {
+    gauge: "Each tick sends the value as is.",
+    counter: "Each tick adds the value to a cumulative total (negative values are added as positive).",
+    updowncounter: "Each tick adds the value (can be negative) to a cumulative total.",
+    histogram: "Each tick records the value as one observation into cumulative buckets."
+};
+
+let config = null;
+let dirty = false;
+
+const $ = (sel, root = document) => root.querySelector(sel);
+
+function setMessage(text, kind = "") {
+    const el = $("#message");
+    el.textContent = text;
+    el.className = kind;
+}
+
+function markDirty() {
+    dirty = true;
+    setMessage("Unsaved changes", "");
+}
+
+async function api(method, url, body) {
+    const res = await fetch(url, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : {},
+        body: body ? JSON.stringify(body) : undefined
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data.errors || [res.statusText]).join("; "));
+    return data;
+}
+
+function newId() {
+    return "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+function renderKv(container, list) {
+    container.innerHTML = "";
+    list.forEach((item, i) => {
+        const row = document.createElement("div");
+        row.className = "kv-row";
+        row.innerHTML = `<input placeholder="key"><input placeholder="value"><button class="small danger">✕</button>`;
+        const [k, v, del] = row.children;
+        k.value = item.key;
+        v.value = item.value;
+        k.oninput = () => { item.key = k.value; markDirty(); };
+        v.oninput = () => { item.value = v.value; markDirty(); };
+        del.onclick = () => { list.splice(i, 1); renderKv(container, list); markDirty(); };
+        container.appendChild(row);
+    });
+}
+
+function updateMetricView(el, m) {
+    $("[data-title]", el).textContent = m.name || "(unnamed)";
+    el.classList.toggle("disabled", !m.enabled);
+    el.querySelectorAll("[data-show]").forEach((n) => {
+        const show = n.dataset.show;
+        n.classList.toggle("hidden", show === "histogram" ? m.type !== "histogram" : m.valueMode !== show);
+    });
+    $("[data-type-hint]", el).textContent = TYPE_HINTS[m.type] || "";
+}
+
+function renderMetrics() {
+    const container = $("#metrics");
+    container.innerHTML = "";
+    config.metrics.forEach((m, i) => {
+        const el = $("#metricTpl").content.firstElementChild.cloneNode(true);
+        el.dataset.id = m.id;
+        el.querySelectorAll("[data-f]").forEach((input) => {
+            const f = input.dataset.f;
+            if (input.type === "checkbox") input.checked = !!m[f];
+            else input.value = m[f] ?? "";
+            input.addEventListener(input.tagName === "SELECT" || input.type === "checkbox" ? "change" : "input", () => {
+                m[f] = input.type === "checkbox" ? input.checked
+                    : input.type === "number" ? (input.value === "" ? "" : Number(input.value))
+                    : input.value;
+                updateMetricView(el, m);
+                markDirty();
+            });
+        });
+        $("[data-del]", el).onclick = () => { config.metrics.splice(i, 1); renderMetrics(); markDirty(); };
+        $("[data-dup]", el).onclick = () => {
+            config.metrics.splice(i + 1, 0, { ...structuredClone(m), id: newId(), name: m.name + "_copy" });
+            renderMetrics();
+            markDirty();
+        };
+        const attrs = $("[data-attrs]", el);
+        $("[data-add-attr]", el).onclick = () => { m.attributes.push({ key: "", value: "" }); renderKv(attrs, m.attributes); markDirty(); };
+        renderKv(attrs, m.attributes);
+        m.resourceAttributes ||= [];
+        const res = $("[data-res]", el);
+        $("[data-add-res]", el).onclick = () => { m.resourceAttributes.push({ key: "", value: "" }); renderKv(res, m.resourceAttributes); markDirty(); };
+        renderKv(res, m.resourceAttributes);
+        updateMetricView(el, m);
+        container.appendChild(el);
+    });
+    if (!config.metrics.length) container.innerHTML = `<p class="hint">No metrics yet. Add one with "+ metric".</p>`;
+}
+
+function resolvedUrl(endpoint) {
+    const e = (endpoint || "").replace(/\/+$/, "");
+    return e.endsWith("/v1/metrics") ? e : e + "/v1/metrics";
+}
+
+function render() {
+    config.headers ||= [];
+    config.basicAuth ||= { username: "", password: "" };
+    $("#endpoint").value = config.endpoint;
+    $("#authUser").value = config.basicAuth.username;
+    $("#authPass").value = config.basicAuth.password;
+    $("#resolvedUrl").textContent = resolvedUrl(config.endpoint);
+    renderKv($("#headers"), config.headers);
+    renderMetrics();
+}
+
+async function save() {
+    try {
+        config = await api("PUT", "/api/config", config);
+        dirty = false;
+        setMessage("Saved", "ok");
+        return true;
+    } catch (err) {
+        setMessage(err.message, "err");
+        return false;
+    }
+}
+
+async function saveIfDirty() {
+    return dirty ? save() : true;
+}
+
+function renderStatus(s) {
+    const badge = $("#runState");
+    badge.textContent = s.running ? "running" : "stopped";
+    badge.classList.toggle("on", s.running);
+    for (const ms of s.metrics) {
+        const el = document.querySelector(`.metric[data-id="${ms.id}"] [data-stats]`);
+        if (!el) continue;
+        const parts = [`sent <span class="ok">${ms.sent}</span>`];
+        if (ms.errors) parts.push(`errors <span class="err">${ms.errors}</span>`);
+        if (ms.lastValue !== null) parts.push(`last ${ms.lastValue}`);
+        if (ms.cumulative !== null) parts.push(`total ${Math.round(ms.cumulative * 1000) / 1000}`);
+        el.innerHTML = parts.join(" · ");
+        el.title = ms.lastError || "";
+    }
+    $("#activity").innerHTML = s.activity.map((a) => `
+        <tr><td>${new Date(a.time).toLocaleTimeString()}</td><td>${escapeHtml(a.metric)}</td><td>${a.value}</td>
+        <td class="${a.ok ? "ok" : "err"}">${a.ok ? "HTTP " + a.status : escapeHtml(a.error)}</td></tr>`).join("");
+}
+
+function escapeHtml(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function pollStatus() {
+    try {
+        renderStatus(await api("GET", "/api/status"));
+    } catch {
+        // server restarting, try again next tick
+    }
+}
+
+// Connection fields
+$("#endpoint").oninput = (e) => { config.endpoint = e.target.value; $("#resolvedUrl").textContent = resolvedUrl(config.endpoint); markDirty(); };
+$("#authUser").oninput = (e) => { config.basicAuth.username = e.target.value; markDirty(); };
+$("#authPass").oninput = (e) => { config.basicAuth.password = e.target.value; markDirty(); };
+document.querySelectorAll("[data-add-kv]").forEach((btn) => {
+    btn.onclick = () => {
+        const key = btn.dataset.addKv;
+        config[key].push({ key: "", value: "" });
+        renderKv($("#" + key), config[key]);
+        markDirty();
+    };
+});
+
+$("#addMetricBtn").onclick = () => {
+    config.metrics.push({
+        id: newId(), enabled: true, name: "simulated.metric", description: "", unit: "", type: "gauge",
+        intervalSeconds: 15, valueMode: "constant", value: 1, min: 0, max: 100,
+        buckets: "5, 10, 25, 50, 100, 250, 500, 1000", resourceAttributes: [{ key: "service.instance.id", value: "otelsimulator" }], attributes: []
+    });
+    renderMetrics();
+    markDirty();
+};
+
+$("#saveBtn").onclick = save;
+$("#startBtn").onclick = async () => {
+    if (!(await saveIfDirty())) return;
+    renderStatus(await api("POST", "/api/start"));
+    setMessage("Simulation started", "ok");
+};
+$("#stopBtn").onclick = async () => {
+    renderStatus(await api("POST", "/api/stop"));
+    setMessage("Simulation stopped", "");
+};
+$("#sendOnceBtn").onclick = async () => {
+    if (!(await saveIfDirty())) return;
+    renderStatus(await api("POST", "/api/send-once"));
+    setMessage("Sent enabled metrics once", "ok");
+};
+$("#resetBtn").onclick = async () => renderStatus(await api("POST", "/api/reset"));
+$("#previewBtn").onclick = async () => {
+    const pre = $("#preview");
+    if (!pre.classList.contains("hidden")) return pre.classList.add("hidden");
+    if (!(await saveIfDirty())) return;
+    const p = await api("GET", "/api/preview");
+    pre.textContent = `POST ${p.url}\n\n` + JSON.stringify(p.payload, null, 2);
+    pre.classList.remove("hidden");
+};
+
+$("#exportBtn").onclick = () => {
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "otel-metrics-simulator.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+};
+$("#importBtn").onclick = () => $("#importFile").click();
+$("#importFile").onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+        config = JSON.parse(await file.text());
+        render();
+        await save();
+    } catch (err) {
+        setMessage("Import failed: " + err.message, "err");
+    }
+    e.target.value = "";
+};
+
+window.addEventListener("beforeunload", (e) => { if (dirty) e.preventDefault(); });
+
+(async () => {
+    config = await api("GET", "/api/config");
+    render();
+    pollStatus();
+    setInterval(pollStatus, 2000);
+})();
+</script>
+</body>
+</html>

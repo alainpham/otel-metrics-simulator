@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# runtime configuration (holds endpoint credentials), defaults live in server/simulator.js
+data/
+
+# logs
+logs/
+*.log
+npm-debug.log*
+
+# environment files
+.env
+.env.*
+
+# editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
