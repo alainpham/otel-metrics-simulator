@@ -4,18 +4,21 @@ This README provides instructions to build and run the otel-metrics-simulator us
 
 ## Using the simulator
 
-Open http://localhost:8080 and:
+Open http://localhost:8080 (port can be changed with `PORT`) and:
 
 1. **Connection**: enter the OTLP/HTTP endpoint (e.g. `http://localhost:4318` or
    `https://otlp-gateway-prod-eu-west-2.grafana.net/otlp`; `/v1/metrics` is appended)
    and optionally basic auth credentials (for Grafana Cloud: instance id + access policy token)
    and extra headers.
-2. **Metrics**: add metrics with name, type (gauge, counter, up-down counter, histogram), unit,
+2. **Metrics**: add metrics with name, type (gauge, boolean, counter, up-down counter, histogram), unit,
    frequency in seconds, value (constant or random in a min/max range), resource attributes
    (e.g. `service.name`, sent in the OTLP `resource`) and data point attributes.
 3. Click **Start**. Each metric is sent on its own interval as an OTLP JSON payload via a
    plain HTTP POST (no OpenTelemetry SDK). **Send once** sends a single round, **Preview payload**
    shows the JSON that will be sent.
+4. The **State** table lists every series as `name{resource attributes, attributes}` with its current
+   value and last send result. Boolean metrics (sent as a 0/1 gauge, like Prometheus `up`) can be
+   flipped there; the new value is saved and, when running, sent right away.
 
 Counters and histograms are cumulative: on each tick the value is added to the running total
 (or recorded as one histogram observation).
@@ -31,10 +34,11 @@ credentials in clear text. `SIM_OTLP_ENDPOINT` sets the endpoint used in the def
 | --- | --- |
 | `GET/PUT /api/config` | read / replace the configuration |
 | `POST /api/start`, `/api/stop` | start / stop sending |
+| `POST /api/metrics/:id/toggle` | flip a boolean metric between 0 and 1 |
 | `POST /api/send-once` | send every enabled metric once |
-| `POST /api/reset` | reset cumulative values and activity log |
+| `POST /api/reset` | reset cumulative values and send stats |
 | `GET /api/preview` | payload that would be sent next |
-| `GET /api/status` | per-metric stats and recent activity |
+| `GET /api/status` | per-metric state: current value and last send result |
 
 ## env vars for otel
 

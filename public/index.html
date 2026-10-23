@@ -50,7 +50,18 @@
         table { width: 100%; border-collapse: collapse; font-size: 12px; }
         td, th { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
         td.err { color: var(--err); } td.ok { color: var(--ok); }
-        .log { max-height: 260px; overflow: auto; }
+        td.series { font-family: ui-monospace, monospace; word-break: break-all; }
+        tr.disabled td { opacity: .5; }
+        .bool { display: inline-block; min-width: 22px; text-align: center; border-radius: 4px; font-weight: 600; }
+        .bool.on { color: #fff; background: var(--ok); } .bool.off { color: #fff; background: var(--err); }
+        .switch { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; font-weight: 600; }
+        .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+        .switch .track { position: relative; width: 44px; height: 24px; border-radius: 12px; background: var(--err); transition: background .15s; }
+        .switch .track::before { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s; }
+        .switch input:checked + .track { background: var(--ok); }
+        .switch input:checked + .track::before { transform: translateX(20px); }
+        .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .switch input:disabled + .track { opacity: .5; }
         pre { background: var(--input); border: 1px solid var(--border); border-radius: 5px; padding: 10px; max-height: 400px; overflow: auto; font-size: 12px; }
         .hidden { display: none; }
         @media (max-width: 640px) { .wide { grid-column: auto; } header, main { padding-left: 16px; padding-right: 16px; } }
@@ -91,25 +102,23 @@
         </section>
 
         <section>
+            <h2>State <span class="spacer"></span>
+                <button class="small" id="previewBtn">Preview payload</button>
+                <button class="small" id="resetBtn">Reset counters</button></h2>
+            <pre id="preview" class="hidden"></pre>
+            <table>
+                <thead><tr><th>Series</th><th>Current value</th><th>Last send</th><th>Toggle</th></tr></thead>
+                <tbody id="state"></tbody>
+            </table>
+        </section>
+
+        <section>
             <h2>Metrics <span class="spacer"></span>
                 <button class="small" id="importBtn">Import JSON</button>
                 <button class="small" id="exportBtn">Export JSON</button>
                 <button class="small" id="addMetricBtn">+ metric</button></h2>
             <input id="importFile" type="file" accept="application/json" class="hidden">
             <div id="metrics"></div>
-        </section>
-
-        <section>
-            <h2>Activity <span class="spacer"></span>
-                <button class="small" id="previewBtn">Preview payload</button>
-                <button class="small" id="resetBtn">Reset counters</button></h2>
-            <pre id="preview" class="hidden"></pre>
-            <div class="log">
-                <table>
-                    <thead><tr><th>Time</th><th>Metric</th><th>Value</th><th>Result</th></tr></thead>
-                    <tbody id="activity"></tbody>
-                </table>
-            </div>
         </section>
     </main>
 
@@ -127,6 +136,7 @@
                 <label>Type
                     <select data-f="type">
                         <option value="gauge">gauge</option>
+                        <option value="boolean">boolean (0/1 gauge)</option>
                         <option value="counter">counter (monotonic sum)</option>
                         <option value="updowncounter">up-down counter (sum)</option>
                         <option value="histogram">histogram</option>
@@ -137,13 +147,19 @@
             </div>
             <div class="row">
                 <label class="wide">Description <input data-f="description"></label>
-                <label>Value
+                <label data-show="numeric">Value
                     <select data-f="valueMode">
                         <option value="constant">constant</option>
                         <option value="random">random in range</option>
                     </select>
                 </label>
                 <label data-show="constant">Value <input data-f="value" type="number" step="any"></label>
+                <label data-show="boolean">Value
+                    <select data-f="value" data-number>
+                        <option value="1">1 (true)</option>
+                        <option value="0">0 (false)</option>
+                    </select>
+                </label>
                 <label data-show="random">Min <input data-f="min" type="number" step="any"></label>
                 <label data-show="random">Max <input data-f="max" type="number" step="any"></label>
                 <label data-show="histogram" class="wide">Bucket bounds (comma separated)
@@ -166,6 +182,7 @@
 <script>
 const TYPE_HINTS = {
     gauge: "Each tick sends the value as is.",
+    boolean: "Sent as a gauge with value 0 or 1. Flip it from the State table, the change is sent right away when running.",
     counter: "Each tick adds the value to a cumulative total (negative values are added as positive).",
     updowncounter: "Each tick adds the value (can be negative) to a cumulative total.",
     histogram: "Each tick records the value as one observation into cumulative buckets."
@@ -221,10 +238,18 @@ function renderKv(container, list) {
 function updateMetricView(el, m) {
     $("[data-title]", el).textContent = m.name || "(unnamed)";
     el.classList.toggle("disabled", !m.enabled);
-    el.querySelectorAll("[data-show]").forEach((n) => {
-        const show = n.dataset.show;
-        n.classList.toggle("hidden", show === "histogram" ? m.type !== "histogram" : m.valueMode !== show);
-    });
+    const isBool = m.type === "boolean";
+    if (isBool) m.value = Number(m.value) === 1 ? 1 : 0;
+    const visible = {
+        numeric: !isBool,
+        constant: !isBool && m.valueMode !== "random",
+        random: !isBool && m.valueMode === "random",
+        boolean: isBool,
+        histogram: m.type === "histogram"
+    };
+    el.querySelectorAll("[data-show]").forEach((n) => n.classList.toggle("hidden", !visible[n.dataset.show]));
+    // both value inputs edit m.value, keep the hidden one in sync
+    el.querySelectorAll('[data-f="value"]').forEach((input) => { if (document.activeElement !== input) input.value = m.value; });
     $("[data-type-hint]", el).textContent = TYPE_HINTS[m.type] || "";
 }
 
@@ -240,7 +265,7 @@ function renderMetrics() {
             else input.value = m[f] ?? "";
             input.addEventListener(input.tagName === "SELECT" || input.type === "checkbox" ? "change" : "input", () => {
                 m[f] = input.type === "checkbox" ? input.checked
-                    : input.type === "number" ? (input.value === "" ? "" : Number(input.value))
+                    : input.type === "number" || "number" in input.dataset ? (input.value === "" ? "" : Number(input.value))
                     : input.value;
                 updateMetricView(el, m);
                 markDirty();
@@ -311,9 +336,38 @@ function renderStatus(s) {
         el.innerHTML = parts.join(" · ");
         el.title = ms.lastError || "";
     }
-    $("#activity").innerHTML = s.activity.map((a) => `
-        <tr><td>${new Date(a.time).toLocaleTimeString()}</td><td>${escapeHtml(a.metric)}</td><td>${a.value}</td>
-        <td class="${a.ok ? "ok" : "err"}">${a.ok ? "HTTP " + a.status : escapeHtml(a.error)}</td></tr>`).join("");
+    $("#state").innerHTML = s.metrics.map((ms) => `
+        <tr class="${ms.enabled ? "" : "disabled"}">
+            <td class="series">${escapeHtml(seriesName(ms))}</td>
+            <td>${formatValue(ms)}</td>
+            <td class="${ms.lastError ? "err" : "ok"}" title="${escapeHtml(ms.lastError || "")}">${lastSend(ms)}</td>
+            <td>${ms.type === "boolean" ? `<label class="switch" title="Switch to ${ms.value === 1 ? 0 : 1}">
+                <input type="checkbox" role="switch" data-toggle="${escapeHtml(ms.id)}" ${ms.value === 1 ? "checked" : ""}>
+                <span class="track"></span>${ms.value === 1 ? "on" : "off"}</label>` : ""}</td>
+        </tr>`).join("") || `<tr><td colspan="4" class="hint">No metrics configured.</td></tr>`;
+}
+
+// name{resource attributes and attributes}, e.g. up{service.name="cart", application="webshop"}
+function seriesName(ms) {
+    const labels = [...(ms.resourceAttributes || []), ...(ms.attributes || [])]
+        .filter((a) => a.key)
+        .map((a) => `${a.key}="${a.value}"`);
+    return `${ms.name}{${labels.join(", ")}}`;
+}
+
+function formatValue(ms) {
+    const v = ms.value;
+    if (ms.type === "boolean") return `<span class="bool ${v === 1 ? "on" : "off"}">${v}</span>`;
+    if (v === null || v === undefined) return "—";
+    if (typeof v === "object") return `count=${v.count} sum=${Math.round(v.sum * 1000) / 1000}`;
+    return String(Math.round(v * 1000) / 1000);
+}
+
+function lastSend(ms) {
+    if (!ms.enabled) return "disabled";
+    if (!ms.lastSentAt) return "—";
+    const time = new Date(ms.lastSentAt).toLocaleTimeString();
+    return ms.lastError ? `${time} · failed (${ms.errors})` : `${time} · HTTP ${ms.lastStatus} · ${ms.sent} sent`;
 }
 
 function escapeHtml(s) {
@@ -365,6 +419,22 @@ $("#sendOnceBtn").onclick = async () => {
     if (!(await saveIfDirty())) return;
     renderStatus(await api("POST", "/api/send-once"));
     setMessage("Sent enabled metrics once", "ok");
+};
+$("#state").onchange = async (e) => {
+    const id = e.target.dataset?.toggle;
+    if (!id) return;
+    e.target.disabled = true;
+    try {
+        const r = await api("POST", `/api/metrics/${encodeURIComponent(id)}/toggle`);
+        // the server saved it, mirror it locally without marking the form dirty
+        const m = config.metrics.find((x) => x.id === id);
+        const el = document.querySelector(`.metric[data-id="${id}"]`);
+        if (m) m.value = r.value;
+        if (m && el) updateMetricView(el, m);
+        renderStatus(r.status);
+    } catch (err) {
+        setMessage(err.message, "err");
+    }
 };
 $("#resetBtn").onclick = async () => renderStatus(await api("POST", "/api/reset"));
 $("#previewBtn").onclick = async () => {

@@ -9,7 +9,7 @@ const simulator = require('./simulator');
 
 // add the prometheus middleware to all routes
 const app = express();
-const PORT = 8080;
+const PORT = Number(process.env.PORT) || 8080;
 const PUBLIC_DIR = path.join(__dirname, "../public");
 
 // Middleware
@@ -48,6 +48,12 @@ app.post("/api/stop", (req, res) => {
 app.post("/api/reset", (req, res) => {
     simulator.reset();
     res.json(simulator.status());
+});
+
+app.post("/api/metrics/:id/toggle", async (req, res) => {
+    const result = await simulator.toggle(req.params.id);
+    if (result.error) return res.status(result.code).json({ errors: [result.error] });
+    res.json({ value: result.value, status: simulator.status() });
 });
 
 app.post("/api/send-once", async (req, res) => {

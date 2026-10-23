@@ -7,9 +7,9 @@ const path = require("path");
 const axios = require("axios");
 const logger = require("./logger");
 
-const METRIC_TYPES = ["gauge", "counter", "updowncounter", "histogram"];
+// "boolean" is sent as an OTLP gauge whose value is always 0 or 1
+const METRIC_TYPES = ["gauge", "boolean", "counter", "updowncounter", "histogram"];
 const AGGREGATION_TEMPORALITY_CUMULATIVE = 2;
-const MAX_LOG_ENTRIES = 100;
 const CONFIG_FILE = process.env.SIM_CONFIG_FILE || path.join(__dirname, "../data/config.json");
 
 // used when CONFIG_FILE does not exist yet
@@ -35,7 +35,7 @@ function exampleMetric(id, application, serviceName, value) {
         name: "up",
         description: "Whether the service is up (1) or down (0)",
         unit: "",
-        type: "gauge",
+        type: "boolean",
         intervalSeconds: 15,
         valueMode: "constant",
         value,
@@ -100,7 +100,6 @@ let config = loadConfigFile();
 let running = false;
 const timers = new Map(); // metric id -> interval handle
 const state = new Map();  // metric id -> runtime state (cumulative values, stats)
-const activity = [];
 
 function nowNanos() {
     return (BigInt(Date.now()) * 1000000n).toString();
@@ -122,6 +121,7 @@ function parseBuckets(buckets) {
 }
 
 function nextValue(metric) {
+    if (metric.type === "boolean") return Number(metric.value) === 1 ? 1 : 0;
     if (metric.valueMode === "random") {
         const min = Number(metric.min);
         const max = Number(metric.max);
@@ -257,11 +257,6 @@ function requestHeaders() {
     return headers;
 }
 
-function addActivity(entry) {
-    activity.unshift({ time: new Date().toISOString(), ...entry });
-    activity.length = Math.min(activity.length, MAX_LOG_ENTRIES);
-}
-
 async function send(metric) {
     const st = stateFor(metric);
     const { value, otlp } = buildMetric(metric, st);
@@ -278,7 +273,6 @@ async function send(metric) {
         if (res.status >= 200 && res.status < 300) {
             st.sent += 1;
             st.lastError = null;
-            addActivity({ metric: metric.name, value, status: res.status, ok: true });
         } else {
             const body = typeof res.data === "string" ? res.data : JSON.stringify(res.data);
             throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`);
@@ -286,7 +280,6 @@ async function send(metric) {
     } catch (err) {
         st.errors += 1;
         st.lastError = err.message;
-        addActivity({ metric: metric.name, value, status: st.lastStatus, ok: false, error: err.message });
         logger.warn({ metric: metric.name, url, err: err.message }, "Failed to send metric");
     }
 }
@@ -306,7 +299,9 @@ function validate(newConfig) {
         if (!m.name) errors.push(`${label}: name is required`);
         if (!METRIC_TYPES.includes(m.type)) errors.push(`${label}: type must be one of ${METRIC_TYPES.join(", ")}`);
         if (!(Number(m.intervalSeconds) >= 1)) errors.push(`${label}: interval must be at least 1 second`);
-        if (m.valueMode === "random") {
+        if (m.type === "boolean") {
+            if (![0, 1].includes(Number(m.value)) || m.value === "") errors.push(`${label}: boolean value must be 0 or 1`);
+        } else if (m.valueMode === "random") {
             if (Number.isNaN(Number(m.min)) || Number.isNaN(Number(m.max))) errors.push(`${label}: min and max must be numbers`);
             else if (Number(m.min) > Number(m.max)) errors.push(`${label}: min must be <= max`);
         } else if (m.value === "" || Number.isNaN(Number(m.value))) {
@@ -373,7 +368,30 @@ function stop() {
 
 function reset() {
     state.clear();
-    activity.length = 0;
+}
+
+// Flips a boolean metric between 0 and 1, persists it and, when the
+// simulation is running, sends the new value right away.
+async function toggle(id) {
+    const metric = config.metrics.find((m) => m.id === id);
+    if (!metric) return { error: "metric not found", code: 404 };
+    if (metric.type !== "boolean") return { error: "only boolean metrics can be toggled", code: 400 };
+    metric.value = Number(metric.value) === 1 ? 0 : 1;
+    try {
+        saveConfigFile(config);
+    } catch (err) {
+        logger.error({ file: CONFIG_FILE, err: err.message }, "Failed to write configuration file");
+    }
+    logger.info({ metric: metric.name, id, value: metric.value }, "Boolean metric toggled");
+    if (running && metric.enabled) await send(metric);
+    return { value: metric.value };
+}
+
+function currentValue(m, st) {
+    if (m.type === "boolean") return Number(m.value);
+    if (m.type === "counter" || m.type === "updowncounter") return st ? st.cumulative : null;
+    if (m.type === "histogram") return st?.histogram ? { count: st.histogram.count, sum: st.histogram.sum } : null;
+    return st?.lastValue ?? (m.valueMode === "random" ? null : Number(m.value));
 }
 
 async function sendOnce() {
@@ -400,6 +418,11 @@ function status() {
             return {
                 id: m.id,
                 name: m.name,
+                type: m.type,
+                enabled: m.enabled,
+                resourceAttributes: m.resourceAttributes,
+                attributes: m.attributes,
+                value: currentValue(m, st),
                 scheduled: timers.has(m.id),
                 sent: st?.sent ?? 0,
                 errors: st?.errors ?? 0,
@@ -409,8 +432,7 @@ function status() {
                 lastStatus: st?.lastStatus ?? null,
                 lastError: st?.lastError ?? null
             };
-        }),
-        activity
+        })
     };
 }
 
@@ -418,4 +440,4 @@ function getConfig() {
     return config;
 }
 
-module.exports = { getConfig, setConfig, start, stop, reset, sendOnce, preview, status, METRIC_TYPES };
+module.exports = { getConfig, setConfig, start, stop, reset, toggle, sendOnce, preview, status, METRIC_TYPES };
