@@ -2,6 +2,8 @@
 
 This README provides instructions to build and run the otel-metrics-simulator using Docker.
 
+![alt text](image.png)
+
 ## Using the simulator
 
 Open http://localhost:8080 (port can be changed with `PORT`) and:
